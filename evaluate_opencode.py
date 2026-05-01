@@ -3,6 +3,7 @@ import os
 import subprocess
 import tempfile
 import argparse
+import shutil
 
 def clone_and_checkout(repo, base_commit, target_dir):
     """Clones a repository and checks out a specific commit."""
@@ -68,7 +69,7 @@ def extract_git_patch(repo_dir):
     unstaged_result = subprocess.run(["git", "diff"], cwd=repo_dir, check=True, capture_output=True, text=True)
     return result.stdout + unstaged_result.stdout
 
-def process_instance(repo, instance_id, instance_data, output_file):
+def process_instance(repo, instance_id, instance_data, output_file, config_file=None):
     print(f"\n{'='*50}\nProcessing {instance_id} ({repo})\n{'='*50}")
     base_commit = instance_data["base_commit"]
     problem_statement = instance_data["problem_statement"]
@@ -76,6 +77,14 @@ def process_instance(repo, instance_id, instance_data, output_file):
     with tempfile.TemporaryDirectory() as temp_dir:
         try:
             clone_and_checkout(repo, base_commit, temp_dir)
+            
+            # Prevent opencode.json from ever showing up in the git diff
+            with open(os.path.join(temp_dir, ".git", "info", "exclude"), "a") as f:
+                f.write("\nopencode.json\n")
+                
+            if config_file and os.path.exists(config_file):
+                shutil.copy(config_file, os.path.join(temp_dir, "opencode.json"))
+                print(f"[*] Copied config {config_file} to container root")
             
             env_image_key = instance_data.get("env_image_key", "")
             if env_image_key:
@@ -112,6 +121,7 @@ def main():
     parser.add_argument("--data", default="swe_bench_lite_structured.json", help="Path to structured json data")
     parser.add_argument("--output", default="predictions.jsonl", help="Output predictions file")
     parser.add_argument("--limit", type=int, default=None, help="Max number of instances to process")
+    parser.add_argument("--config", default=None, help="Path to opencode.json config file to mount into the container")
     args = parser.parse_args()
 
     print(f"Loading data from {args.data}...")
@@ -135,7 +145,7 @@ def main():
         
     for i, (repo, instance_id, instance_data) in enumerate(instances):
         print(f"Progress: {i+1}/{len(instances)}")
-        process_instance(repo, instance_id, instance_data, args.output)
+        process_instance(repo, instance_id, instance_data, args.output, args.config)
         
     print(f"\nDone! Predictions saved to {args.output}")
     
