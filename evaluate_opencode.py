@@ -5,18 +5,9 @@ import tempfile
 import argparse
 import shutil
 
-def clone_and_checkout(repo, base_commit, target_dir):
-    """Clones a repository and checks out a specific commit."""
-    repo_url = f"https://github.com/{repo}.git"
-    print(f"[*] Cloning {repo_url} into {target_dir}...")
-    subprocess.run(["git", "clone", repo_url, target_dir], check=True, capture_output=True)
-    
-    print(f"[*] Checking out commit {base_commit}...")
-    subprocess.run(["git", "checkout", base_commit], cwd=target_dir, check=True, capture_output=True)
-
-def run_opencode_in_docker(repo_dir, problem_statement, env_image_name):
-    """Runs OpenCode inside a Docker container using the SWE-bench environment."""
-    print(f"[*] Running OpenCode via sandboxed Docker image: {env_image_name}")
+def run_opencode_in_docker(output_dir, problem_statement, image_name):
+    """Runs OpenCode inside a Docker container using the SWE-bench eval environment."""
+    print(f"[*] Running OpenCode via SWE-bench Docker image: {image_name}")
     prompt = f"Resolve this issue: {problem_statement}"
     
     openai_api_key = os.environ.get("OPENAI_API_KEY", "")
@@ -31,25 +22,45 @@ set -e
 
 # 1. Setup OpenCode Environment
 curl -fsSL https://opencode.ai/install | bash
-source ~/.bashrc
+
+# Ensure opencode is in PATH
+export PATH="$HOME/.opencode/bin:$HOME/.local/bin:$PATH"
+
+# The eval image already has the repo cloned in /testbed
+cd /testbed
+
+# Avoid dubious ownership errors in newer Git versions
+git config --global --add safe.directory /testbed
+
+# If a config file was passed via the output mount, copy it in and ignore it in Git
+if [ -f /output/opencode.json ]; then
+    cp /output/opencode.json /testbed/opencode.json
+    echo "opencode.json" >> .git/info/exclude
+fi
 
 # (Optional) Add any other setup commands here:
 # e.g., git config --global user.email "bot@example.com"
-# e.g., opencode plugin install some-plugin
 
 # 2. Run OpenCode
 # We use the $PROBLEM_STATEMENT environment variable to avoid quote escaping issues.
-opencode run "$PROBLEM_STATEMENT" --dangerously-skip-permissions --pure
+# We append || true so that if opencode fails, it does not abort the script before patch extraction.
+opencode run "$PROBLEM_STATEMENT" --dangerously-skip-permissions --pure || true
+
+# 3. Extract the Patch
+echo "[*] Extracting patch inside container..."
+git add .
+git diff --staged > /output/patch.diff
+git diff >> /output/patch.diff
 """
 
-    # Using the pre-built SWE-bench environment image (which has all python dependencies installed)
+    # Using the pre-built SWE-bench evaluation image (which already has the repo checked out)
     cmd = [
         "docker", "run", "--rm",
-        "-v", f"{os.path.abspath(repo_dir)}:/testbed",
+        "-v", f"{os.path.abspath(output_dir)}:/output",
         "-w", "/testbed",
         "-e", f"OPENAI_API_KEY={openai_api_key}",
         "-e", f"PROBLEM_STATEMENT={prompt}",
-        env_image_name,
+        image_name,
         "bash", "-c", container_script
     ]
     
@@ -59,45 +70,35 @@ opencode run "$PROBLEM_STATEMENT" --dangerously-skip-permissions --pure
         print(f"[!] OpenCode exited with code {result.returncode}")
     return result.stdout, result.stderr
 
-def extract_git_patch(repo_dir):
-    """Extracts git diff from the repository."""
-    print(f"[*] Extracting git patch...")
-    # Add all untracked files to staging area so they show up in diff (or we can use diff HEAD)
-    subprocess.run(["git", "add", "."], cwd=repo_dir, check=True, capture_output=True)
-    result = subprocess.run(["git", "diff", "--staged"], cwd=repo_dir, check=True, capture_output=True, text=True)
-    # Also get unstaged diffs just in case
-    unstaged_result = subprocess.run(["git", "diff"], cwd=repo_dir, check=True, capture_output=True, text=True)
-    return result.stdout + unstaged_result.stdout
-
 def process_instance(repo, instance_id, instance_data, output_file, config_file=None):
     print(f"\n{'='*50}\nProcessing {instance_id} ({repo})\n{'='*50}")
-    base_commit = instance_data["base_commit"]
     problem_statement = instance_data["problem_statement"]
     
     with tempfile.TemporaryDirectory() as temp_dir:
         try:
-            clone_and_checkout(repo, base_commit, temp_dir)
-            
-            # Prevent opencode.json from ever showing up in the git diff
-            with open(os.path.join(temp_dir, ".git", "info", "exclude"), "a") as f:
-                f.write("\nopencode.json\n")
-                
+            # We use temp_dir exclusively as an output directory now
             if config_file and os.path.exists(config_file):
                 shutil.copy(config_file, os.path.join(temp_dir, "opencode.json"))
-                print(f"[*] Copied config {config_file} to container root")
+                print(f"[*] Staged config {config_file} for container")
             
-            env_image_key = instance_data.get("env_image_key", "")
-            if env_image_key:
-                env_image_name = f"swebench/{env_image_key}"
-            else:
-                print("[!] Warning: env_image_key not found in JSON. Falling back to node:20-alpine.")
-                env_image_name = "node:20-alpine"
+            image_name = instance_data.get("instance_image_key", "")
+            if not image_name:
+                print("[!] Error: instance_image_key not found in JSON. Did you run the updated export_to_json.py?")
+                return
                 
-            run_opencode_in_docker(temp_dir, problem_statement, env_image_name)
-            patch = extract_git_patch(temp_dir)
+            stdout, stderr = run_opencode_in_docker(temp_dir, problem_statement, image_name)
+            
+            # Read the patch generated inside the container
+            patch_path = os.path.join(temp_dir, "patch.diff")
+            patch = ""
+            if os.path.exists(patch_path):
+                with open(patch_path, "r") as pf:
+                    patch = pf.read()
             
             if not patch.strip():
                 print(f"[!] No patch generated by OpenCode for {instance_id}.")
+                print(f"--- STDOUT ---\n{stdout}")
+                print(f"--- STDERR ---\n{stderr}")
                 patch = "" # Save empty patch anyway to mark attempted
                 
             prediction = {
