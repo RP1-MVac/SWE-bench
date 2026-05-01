@@ -22,16 +22,34 @@ def run_opencode_in_docker(repo_dir, problem_statement, env_image_name):
     if not openai_api_key:
         print("[!] Warning: OPENAI_API_KEY is not set in environment.")
 
+    # Define a multi-line bash script to run inside the container.
+    # This makes it very easy to add extra setup commands, install plugins, etc.
+    container_script = """
+# Exit immediately if any command fails
+set -e
+
+# 1. Setup OpenCode Environment
+curl -fsSL https://opencode.ai/install | bash
+source ~/.bashrc
+
+# (Optional) Add any other setup commands here:
+# e.g., git config --global user.email "bot@example.com"
+# e.g., opencode plugin install some-plugin
+
+# 2. Run OpenCode
+# We use the $PROBLEM_STATEMENT environment variable to avoid quote escaping issues.
+opencode run "$PROBLEM_STATEMENT" --dangerously-skip-permissions --pure
+"""
+
     # Using the pre-built SWE-bench environment image (which has all python dependencies installed)
     cmd = [
         "docker", "run", "--rm",
         "-v", f"{os.path.abspath(repo_dir)}:/testbed",
         "-w", "/testbed",
         "-e", f"OPENAI_API_KEY={openai_api_key}",
+        "-e", f"PROBLEM_STATEMENT={prompt}",
         env_image_name,
-        # The environment uses python, so we invoke npx opencode using npx which requires node
-        # Since node might not be in the python env image, we might need a workaround or assume npx works
-        "bash", "-c", f"curl -fsSL https://opencode.ai/install | bash && source ~/.bashrc && opencode run '{prompt}' --dangerously-skip-permissions --pure"
+        "bash", "-c", container_script
     ]
     
     # We don't check=True because opencode might return non-zero if it exits, we still want the diff
