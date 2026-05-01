@@ -3,6 +3,13 @@ import os
 from collections import defaultdict
 from datasets import load_dataset, load_from_disk
 
+# Import SWE-bench tools to get the correct pre-built environment image
+try:
+    from swebench.harness.test_spec.test_spec import make_test_spec
+except ImportError:
+    print("[!] Failed to import SWE-bench. Make sure you run `pip install -e .` in the SWE-bench folder.")
+    make_test_spec = None
+
 def main():
     print("Loading SWE-bench_Lite dataset...")
     
@@ -24,12 +31,19 @@ def main():
         repo = row["repo"]
         instance_id = row["instance_id"]
         
+        # Determine the env_image_key using SWE-bench harness
+        env_image_key = ""
+        if make_test_spec:
+            spec = make_test_spec(row)
+            env_image_key = spec.env_image_key
+
         # Build a clean dictionary for the instance
         instance_data = {
             "base_commit": row.get("base_commit", ""),
             "created_at": row.get("created_at", ""),
             "version": row.get("version", ""),
             "environment_setup_commit": row.get("environment_setup_commit", ""),
+            "env_image_key": env_image_key,
             "problem_statement": row.get("problem_statement", ""),
             "hints_text": row.get("hints_text", ""),
             "tests": {
