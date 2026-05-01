@@ -31,11 +31,11 @@ def main():
         repo = row["repo"]
         instance_id = row["instance_id"]
         
-        # Determine the env_image_key using SWE-bench harness
-        env_image_key = ""
+        # Determine the instance_image_key using SWE-bench harness
+        instance_image_key = ""
         if make_test_spec:
-            spec = make_test_spec(row)
-            env_image_key = spec.env_image_key
+            spec = make_test_spec(row, namespace="swebench")
+            instance_image_key = spec.instance_image_key
 
         # Build a clean dictionary for the instance
         instance_data = {
@@ -43,7 +43,7 @@ def main():
             "created_at": row.get("created_at", ""),
             "version": row.get("version", ""),
             "environment_setup_commit": row.get("environment_setup_commit", ""),
-            "env_image_key": env_image_key,
+            "instance_image_key": instance_image_key,
             "problem_statement": row.get("problem_statement", ""),
             "hints_text": row.get("hints_text", ""),
             "tests": {
