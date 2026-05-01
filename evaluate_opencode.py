@@ -120,6 +120,18 @@ def main():
         process_instance(repo, instance_id, instance_data, args.output)
         
     print(f"\nDone! Predictions saved to {args.output}")
+    
+    print("\n" + "="*50)
+    print("Starting SWE-bench Evaluation")
+    print("="*50)
+    eval_cmd = [
+        "python3", "-m", "swebench.harness.run_evaluation",
+        "--dataset_name", "princeton-nlp/SWE-bench_Lite",
+        "--predictions_path", args.output,
+        "--max_workers", "4",
+        "--run_id", "opencode-evaluation"
+    ]
+    subprocess.run(eval_cmd)
 
 if __name__ == "__main__":
     main()
